@@ -1,4 +1,6 @@
-PyMuPDF==1.24.0
-Pillow==10.1.0
-EbookLib==0.18
-beautifulsoup4==4.12.2
+PyMuPDF==1.23.7
+Pillow==10.2.0
+argon2-cffi==23.1.0
+cryptography==42.0.2
+ebooklib==0.18
+beautifulsoup4==4.12.3
