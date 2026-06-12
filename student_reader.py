@@ -169,7 +169,7 @@ def count_pages(filepath, book_type):
             return len(doc)
         except:
             return 1
-    else:  # epub
+    else:
         try:
             book = epub.read_epub(filepath)
             items = list(book.get_items())
@@ -261,13 +261,405 @@ class UniversalReader:
         toolbar = tk.Frame(self.window, bg="#E8E0D5")
         toolbar.pack(side=tk.TOP, fill=tk.X)
 
-        # Row 1
         row1 = tk.Frame(toolbar, bg="#E8E0D5")
         row1.pack(fill=tk.X, pady=2)
         tk.Button(row1, text="◀ Prev", command=self.prev_page, bg="#E6A157", fg="#1A4A4A", font=("Inter", 9, "bold")).pack(side=tk.LEFT, padx=5)
         self.page_label = tk.Label(row1, text="", bg="#E8E0D5", fg="#1A4A4A", font=("Inter", 10, "bold"))
         self.page_label.pack(side=tk.LEFT, padx=20)
         tk.Button(row1, text="Next ▶", command=self.next_page, bg="#E6A157", fg="#1A4A4A", font=("Inter", 9, "bold")).pack(side=tk.LEFT, padx=5)
+        if self.book_type == "pdf":
+            tk.Button(row1, text="Zoom +", command=self.zoom_in, bg="#1A4A4A", fg="#F9F6F0", font=("Inter", 9)).pack(side=tk.LEFT, padx=5)
+            tk.Button(row1, text="Zoom -", command=self.zoom_out, bg="#1A4A4A", fg="#F9F6F0", font=("Inter", 9)).pack(side=tk.LEFT, padx=5)
+        tk.Button(row1, text="🎯 Focus", command=self.toggle_focus, bg="#E6A157", fg="#1A4A4A", font=("Inter", 9)).pack(side=tk.LEFT, padx=5)
+        tk.Button(row1, text="🌙 Dark", command=self.toggle_theme, bg="#1A4A4A", fg="#F9F6F0", font=("Inter", 9)).pack(side=tk.LEFT, padx=5)
+        tk.Button(row1, text="🔖 Bookmark", command=self.add_bookmark, bg="#E6A157", fg="#1A4A4A", font=("Inter", 9)).pack(side=tk.LEFT, padx=5)
+        tk.Button(row1, text="📝 Note", command=self.add_note, bg="#E6A157", fg="#1A4A4A", font=("Inter", 9)).pack(side=tk.LEFT, padx=5)
+        tk.Button(row1, text="✍️ Highlight", command=self.add_highlight, bg="#E6A157", fg="#1A4A4A", font=("Inter", 9)).pack(side=tk.LEFT, padx=5)
+        tk.Button(row1, text="📖 Dict", command=self.lookup_word, bg="#1A4A4A", fg="#F9F6F0", font=("Inter", 9)).pack(side=tk.LEFT, padx=5)
+        tk.Button(row1, text="🔁 Thesaurus", command=self.thesaurus, bg="#1A4A4A", fg="#F9F6F0", font=("Inter", 9)).pack(side=tk.LEFT, padx=5)
+
+        row2 = tk.Frame(toolbar, bg="#E8E0D5")
+        row2.pack(fill=tk.X, pady=2)
+        tk.Label(row2, text="Search:", bg="#E8E0D5", fg="#1A4A4A").pack(side=tk.LEFT, padx=5)
+        self.search_entry = tk.Entry(row2, width=20, font=("Inter", 9))
+        self.search_entry.pack(side=tk.LEFT, padx=5)
+        self.search_entry.bind("<Return>", lambda e: self.search_text())
+        tk.Button(row2, text="Find", command=self.search_text, bg="#E6A157", fg="#1A4A4A", font=("Inter", 9)).pack(side=tk.LEFT, padx=2)
+        tk.Button(row2, text="Next", command=self.next_result, bg="#1A4A4A", fg="#F9F6F0", font=("Inter", 9)).pack(side=tk.LEFT, padx=5)
+        tk.Label(row2, text="Jump to page:", bg="#E8E0D5", fg="#1A4A4A").pack(side=tk.LEFT, padx=10)
+        self.jump_spin = tk.Spinbox(row2, from_=1, to=self.total_pages, width=5, command=self.jump_to_page)
+        self.jump_spin.pack(side=tk.LEFT, padx=2)
+        tk.Button(row2, text="Go", command=self.jump_to_page, bg="#E6A157", fg="#1A4A4A", font=("Inter", 9)).pack(side=tk.LEFT, padx=2)
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(toolbar, variable=self.progress_var, maximum=self.total_pages, length=200)
+        self.progress_bar.pack(side=tk.RIGHT, padx=10)
+
+        # Main content area
+        if self.book_type == "pdf":
+            canvas_frame = tk.Frame(self.window)
+            canvas_frame.pack(fill=tk.BOTH, expand=True)
+            self.canvas = tk.Canvas(canvas_frame, bg="#F9F6F0")
+            vs = tk.Scrollbar(canvas_frame, orient=tk.VERTICAL, command=self.canvas.yview)
+            hs = tk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL, command=self.canvas.xview)
+            self.canvas.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
+            vs.pack(side=tk.RIGHT, fill=tk.Y)
+            hs.pack(side=tk.BOTTOM, fill=tk.X)
+            self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            self.canvas.bind("<MouseWheel>", self._on_mousewheel)
+        else:
+            text_frame = tk.Frame(self.window)
+            text_frame.pack(fill=tk.BOTH, expand=True)
+            self.text_widget = tk.Text(text_frame, wrap=tk.WORD, font=("Inter", 12), bg="#F9F6F0", fg="#1A4A4A")
+            vs = tk.Scrollbar(text_frame, orient=tk.VERTICAL, command=self.text_widget.yview)
+            self.text_widget.configure(yscrollcommand=vs.set)
+            vs.pack(side=tk.RIGHT, fill=tk.Y)
+            self.text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.render_page()
+        self.window.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def render_page(self):
+        if self.book_type == "pdf":
+            page = self.doc[self.current_page]
+            mat = fitz.Matrix(self.zoom, self.zoom)
+            pix = page.get_pixmap(matrix=mat)
+            img = Image.open(io.BytesIO(pix.tobytes("ppm")))
+            self.tk_img = ImageTk.PhotoImage(img)
+            self.canvas.delete("all")
+            self.canvas.config(scrollregion=(0, 0, self.tk_img.width(), self.tk_img.height()))
+            self.canvas.create_image(0, 0, anchor=tk.NW, image=self.tk_img)
+            for pnum, rects in self.search_results:
+                if pnum == self.current_page:
+                    for r in rects:
+                        x0, y0, x1, y1 = r.x0*self.zoom, r.y0*self.zoom, r.x1*self.zoom, r.y1*self.zoom
+                        self.canvas.create_rectangle(x0, y0, x1, y1, outline="yellow", width=2)
+        else:
+            self.text_widget.delete(1.0, tk.END)
+            text = self.epub_content[self.current_page]
+            self.text_widget.insert(tk.END, text)
+            for pnum, positions in self.search_results:
+                if pnum == self.current_page:
+                    for start, end in positions:
+                        self.text_widget.tag_add("highlight", f"1.0+{start}c", f"1.0+{end}c")
+                        self.text_widget.tag_config("highlight", background="yellow")
+        self.page_label.config(text=f"Page {self.current_page+1}/{self.total_pages}")
+        self.progress_var.set(self.current_page+1)
+        self.jump_spin.delete(0, tk.END)
+        self.jump_spin.insert(0, str(self.current_page+1))
+        save_last_position(self.book_path, self.current_page)
+
+    def prev_page(self):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.render_page()
+    def next_page(self):
+        if self.current_page < self.total_pages - 1:
+            self.current_page += 1
+            self.render_page()
+    def zoom_in(self):
+        if self.book_type == "pdf":
+            self.zoom = min(self.zoom + 0.2, 3.0)
+            self.render_page()
+    def zoom_out(self):
+        if self.book_type == "pdf":
+            self.zoom = max(self.zoom - 0.2, 0.5)
+            self.render_page()
+    def toggle_focus(self):
+        self.focus_mode = not self.focus_mode
+        self.window.attributes('-fullscreen', self.focus_mode)
+        if self.book_type == "epub":
+            bg = "#1e1e1e" if self.focus_mode else "#F9F6F0"
+            fg = "#ddd" if self.focus_mode else "#1A4A4A"
+            self.text_widget.config(bg=bg, fg=fg)
+    def toggle_theme(self):
+        self.dark_mode = not self.dark_mode
+        if self.book_type == "pdf":
+            self.canvas.config(bg="#1e1e1e" if self.dark_mode else "#F9F6F0")
+        else:
+            bg = "#1e1e1e" if self.dark_mode else "#F9F6F0"
+            fg = "#ddd" if self.dark_mode else "#1A4A4A"
+            self.text_widget.config(bg=bg, fg=fg)
+
+    def search_text(self):
+        query = self.search_entry.get().strip()
+        if not query:
+            return
+        self.search_results = []
+        if self.book_type == "pdf":
+            for p in range(self.total_pages):
+                rects = self.doc[p].search_for(query)
+                if rects:
+                    self.search_results.append((p, rects))
+        else:
+            for p, text in enumerate(self.epub_content):
+                if query.lower() in text.lower():
+                    positions = []
+                    start = 0
+                    while True:
+                        idx = text.lower().find(query.lower(), start)
+                        if idx == -1:
+                            break
+                        positions.append((idx, idx+len(query)))
+                        start = idx+1
+                    if positions:
+                        self.search_results.append((p, positions))
+        if not self.search_results:
+            messagebox.showinfo("Not Found", f"No matches for '{query}'")
+            self.current_result_index = -1
+        else:
+            self.current_result_index = 0
+            self.go_to_result()
+
+    def go_to_result(self):
+        if self.current_result_index < 0 or self.current_result_index >= len(self.search_results):
+            return
+        page_num, _ = self.search_results[self.current_result_index]
+        self.current_page = page_num
+        self.render_page()
+        self.page_label.config(text=f"Match {self.current_result_index+1}/{len(self.search_results)}")
+        self.window.after(1500, lambda: self.page_label.config(text=f"Page {self.current_page+1}/{self.total_pages}"))
+
+    def next_result(self):
+        if not self.search_results:
+            messagebox.showinfo("No search", "Perform a search first")
+            return
+        self.current_result_index = (self.current_result_index + 1) % len(self.search_results)
+        self.go_to_result()
+
+    def jump_to_page(self):
+        try:
+            target = int(self.jump_spin.get()) - 1
+            if 0 <= target < self.total_pages:
+                self.current_page = target
+                self.render_page()
+            else:
+                messagebox.showwarning("Invalid", f"Page must be between 1 and {self.total_pages}")
+        except:
+            pass
+
+    def add_bookmark(self):
+        note = simpledialog.askstring("Bookmark", "Optional note:", parent=self.window)
+        if self.book_path not in bookmarks:
+            bookmarks[self.book_path] = []
+        bookmarks[self.book_path].append({
+            "page": self.current_page,
+            "note": note or "",
+            "timestamp": datetime.now().isoformat()
+        })
+        save_json(BOOKMARKS_FILE, bookmarks)
+        messagebox.showinfo("Bookmark", f"Bookmarked page {self.current_page+1}")
+
+    def add_note(self):
+        note = simpledialog.askstring("Add Note", "Enter your note:", parent=self.window)
+        if note:
+            if self.book_path not in notes:
+                notes[self.book_path] = []
+            notes[self.book_path].append({
+                "page": self.current_page,
+                "note": note,
+                "timestamp": datetime.now().isoformat()
+            })
+            save_json(NOTES_FILE, notes)
+            messagebox.showinfo("Note", "Note saved")
+
+    def add_highlight(self):
+        text = simpledialog.askstring("Highlight", "Paste the highlighted text:", parent=self.window)
+        if text:
+            if self.book_path not in highlights:
+                highlights[self.book_path] = []
+            highlights[self.book_path].append({
+                "page": self.current_page,
+                "text": text,
+                "timestamp": datetime.now().isoformat()
+            })
+            save_json(HIGHLIGHTS_FILE, highlights)
+            messagebox.showinfo("Highlight", "Highlight saved")
+
+    def lookup_word(self):
+        word = simpledialog.askstring("Dictionary", "Enter word to look up:", parent=self.window)
+        if word:
+            definition = lookup_word(word)
+            messagebox.showinfo("Dictionary", f"{word.capitalize()}: {definition}")
+
+    def thesaurus(self):
+        word = simpledialog.askstring("Thesaurus", "Enter word for synonyms:", parent=self.window)
+        if word:
+            synonyms = get_synonyms(word)
+            messagebox.showinfo("Thesaurus", f"Synonyms of '{word}': {synonyms}")
+
+    def _on_mousewheel(self, event):
+        if self.book_type == "pdf":
+            self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+    def on_close(self):
+        update_reading_time(self.book_path, minutes=1)
+        if self.book_type == "pdf":
+            self.doc.close()
+        self.window.destroy()
+
+def open_selected_book():
+    sel = library_listbox.curselection()
+    if not sel:
+        messagebox.showwarning("No selection", "Select a book first.")
+        return
+    name = library_listbox.get(sel[0])
+    info = library[name]
+    if not os.path.exists(info["path"]):
+        messagebox.showerror("Missing", f"File not found:\n{info['path']}")
+        del library[name]
+        save_library(library)
+        refresh_library_list()
+        return
+    UniversalReader(root, info["path"], info["type"], info["total_pages"])
+
+# ------------------------------
+# Admin Tunnel & Export
+# ------------------------------
+def show_admin_tunnel():
+    win = tk.Toplevel(root)
+    win.title("Admin Tunnel")
+    win.geometry("500x500")
+    win.configure(bg="#F9F6F0")
+    tk.Label(win, text="📦 Admin Book Tunnel", font=("Inter", 14, "bold"), bg="#F9F6F0", fg="#1A4A4A").pack(pady=10)
+    tk.Button(win, text="Batch Import PDF/EPUB", command=batch_import, bg="#E6A157", fg="#1A4A4A").pack(pady=5)
+    tk.Button(win, text="Reading Statistics", command=show_stats, bg="#1A4A4A", fg="#F9F6F0").pack(pady=5)
+    tk.Button(win, text="View Bookmarks", command=view_bookmarks, bg="#1A4A4A", fg="#F9F6F0").pack(pady=5)
+    tk.Button(win, text="View Notes", command=view_notes, bg="#1A4A4A", fg="#F9F6F0").pack(pady=5)
+    tk.Button(win, text="View Highlights", command=view_highlights, bg="#1A4A4A", fg="#F9F6F0").pack(pady=5)
+    tk.Button(win, text="📄 Export All Data", command=export_all_data, bg="#E6A157", fg="#1A4A4A").pack(pady=5)
+
+def show_stats():
+    total = stats.get("total_minutes", 0)
+    last_book = stats.get("last_book", "None")
+    last_page = stats.get("last_page", 0)
+    msg = f"Total reading time: {total} minutes\nLast opened: {Path(last_book).name if last_book else 'None'} (page {last_page+1})"
+    messagebox.showinfo("Reading Statistics", msg)
+
+def view_bookmarks():
+    if not bookmarks:
+        messagebox.showinfo("Bookmarks", "No bookmarks.")
+        return
+    w = tk.Toplevel(root)
+    w.title("Bookmarks")
+    w.geometry("600x400")
+    txt = tk.Text(w, wrap=tk.WORD)
+    txt.pack(fill=tk.BOTH, expand=True)
+    for path, lst in bookmarks.items():
+        txt.insert(tk.END, f"\n📘 {Path(path).name}\n")
+        for b in lst:
+            txt.insert(tk.END, f"  Page {b['page']+1}: {b['note']} ({b['timestamp'][:10]})\n")
+
+def view_notes():
+    if not notes:
+        messagebox.showinfo("Notes", "No notes.")
+        return
+    w = tk.Toplevel(root)
+    w.title("Notes")
+    w.geometry("600x400")
+    txt = tk.Text(w, wrap=tk.WORD)
+    txt.pack(fill=tk.BOTH, expand=True)
+    for path, lst in notes.items():
+        txt.insert(tk.END, f"\n📘 {Path(path).name}\n")
+        for n in lst:
+            txt.insert(tk.END, f"  Page {n['page']+1}: {n['note']} ({n['timestamp'][:10]})\n")
+
+def view_highlights():
+    if not highlights:
+        messagebox.showinfo("Highlights", "No highlights.")
+        return
+    w = tk.Toplevel(root)
+    w.title("Highlights")
+    w.geometry("600x400")
+    txt = tk.Text(w, wrap=tk.WORD)
+    txt.pack(fill=tk.BOTH, expand=True)
+    for path, lst in highlights.items():
+        txt.insert(tk.END, f"\n📘 {Path(path).name}\n")
+        for h in lst:
+            txt.insert(tk.END, f"  Page {h['page']+1}: \"{h['text']}\" ({h['timestamp'][:10]})\n")
+
+def export_all_data():
+    out = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text files", "*.txt")])
+    if not out:
+        return
+    with open(out, "w", encoding="utf-8") as f:
+        f.write("STUDENT READER EXPORT\n")
+        f.write(f"Date: {datetime.now().isoformat()}\n\n")
+        f.write("=== BOOKMARKS ===\n")
+        for path, lst in bookmarks.items():
+            f.write(f"\nBook: {Path(path).name}\n")
+            for b in lst:
+                f.write(f"  Page {b['page']+1}: {b['note']} ({b['timestamp'][:10]})\n")
+        f.write("\n=== NOTES ===\n")
+        for path, lst in notes.items():
+            f.write(f"\nBook: {Path(path).name}\n")
+            for n in lst:
+                f.write(f"  Page {n['page']+1}: {n['note']} ({n['timestamp'][:10]})\n")
+        f.write("\n=== HIGHLIGHTS ===\n")
+        for path, lst in highlights.items():
+            f.write(f"\nBook: {Path(path).name}\n")
+            for h in lst:
+                f.write(f"  Page {h['page']+1}: \"{h['text']}\" ({h['timestamp'][:10]})\n")
+    messagebox.showinfo("Export", f"Exported to {out}")
+
+def show_about():
+    w = tk.Toplevel(root)
+    w.title("About")
+    w.geometry("400x300")
+    w.configure(bg="#F9F6F0")
+    tk.Label(w, text="Student Reader", font=("Inter", 16, "bold"), bg="#F9F6F0", fg="#1A4A4A").pack(pady=10)
+    tk.Label(w, text="Version 3.0", bg="#F9F6F0", fg="#1A4A4A").pack()
+    tk.Label(w, text="Developed by: Sharif Jogisharif", bg="#F9F6F0", fg="#1A4A4A").pack(pady=5)
+    tk.Label(w, text="WhatsApp: +254712345678", bg="#F9F6F0", fg="#1A4A4A").pack()
+    tk.Label(w, text="\nPDF + EPUB reader\nOffline dictionary & thesaurus\nFocus mode, bookmarks, notes, highlights", bg="#F9F6F0", fg="#E6A157", justify=tk.CENTER).pack()
+    tk.Button(w, text="Close", command=w.destroy, bg="#E6A157", fg="#1A4A4A").pack(pady=10)
+
+# ------------------------------
+# Main UI
+# ------------------------------
+root = tk.Tk()
+root.withdraw()
+if needs_authentication():
+    show_password_dialog()
+root.deiconify()
+root.title("Student Reader - Sharif")
+root.geometry("1100x700")
+root.configure(bg="#F9F6F0")
+
+left_frame = tk.Frame(root, bg="#E8E0D5", width=300)
+left_frame.pack(side=tk.LEFT, fill=tk.Y)
+tk.Label(left_frame, text="📚 My Library", font=("Inter", 16, "bold"), bg="#E8E0D5", fg="#1A4A4A").pack(pady=10)
+library_listbox = tk.Listbox(left_frame, bg="white", fg="#1A4A4A", font=("Inter", 10), height=25, selectbackground="#E6A157")
+library_listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+btn_frame = tk.Frame(left_frame, bg="#E8E0D5")
+btn_frame.pack(fill=tk.X, padx=10, pady=5)
+tk.Button(btn_frame, text="📂 Import Book", command=import_book, bg="#E6A157", fg="#1A4A4A", font=("Inter", 10, "bold")).pack(side=tk.LEFT, padx=5)
+tk.Button(btn_frame, text="📖 Open", command=open_selected_book, bg="#1A4A4A", fg="#F9F6F0", font=("Inter", 10, "bold")).pack(side=tk.LEFT, padx=5)
+tk.Button(left_frame, text="⚙️ Admin Tunnel", command=show_admin_tunnel, bg="#E6A157", fg="#1A4A4A", font=("Inter", 10)).pack(pady=5, padx=10, fill=tk.X)
+tk.Button(left_frame, text="ℹ️ About", command=show_about, bg="#1A4A4A", fg="#F9F6F0", font=("Inter", 10)).pack(pady=5, padx=10, fill=tk.X)
+
+right_frame = tk.Frame(root, bg="#F9F6F0")
+right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=20, pady=20)
+welcome_text = f"""📖 Welcome to Student Reader
+
+• PDF & EPUB support.
+• Import books (single or batch via Admin Tunnel).
+• Open a book with double‑click or Open button.
+• Reading tools:
+   - Navigation, zoom (PDF), focus mode, dark/light theme
+   - Search with highlight, quick page jump
+   - Bookmarks, notes, highlights
+   - Offline dictionary & thesaurus
+   - Reading time tracking & "Where you left off"
+• Admin Tunnel: batch import, view all annotations, export data.
+
+Password (case‑sensitive): {PASSWORD}
+"""
+welcome_label = tk.Label(right_frame, text=welcome_text, font=("Inter", 12), bg="#F9F6F0", fg="#1A4A4A", justify=tk.LEFT)
+welcome_label.pack(pady=20, padx=20)
+
+library_listbox.bind("<Double-Button-1>", lambda e: open_selected_book())
+refresh_library_list()
+root.mainloop()elf.next_page, bg="#E6A157", fg="#1A4A4A", font=("Inter", 9, "bold")).pack(side=tk.LEFT, padx=5)
         if self.book_type == "pdf":
             tk.Button(row1, text="Zoom +", command=self.zoom_in, bg="#1A4A4A", fg="#F9F6F0", font=("Inter", 9)).pack(side=tk.LEFT, padx=5)
             tk.Button(row1, text="Zoom -", command=self.zoom_out, bg="#1A4A4A", fg="#F9F6F0", font=("Inter", 9)).pack(side=tk.LEFT, padx=5)
