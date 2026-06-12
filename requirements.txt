@@ -1,2 +1,4 @@
 PyMuPDF==1.24.0
 Pillow==10.1.0
+EbookLib==0.18
+beautifulsoup4==4.12.2
